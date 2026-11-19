@@ -1,0 +1,15 @@
+{
+  "name": "Comment Relay",
+  "id": "1548997926266028993",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "enablePrivatePluginApi": true,
+  "permissions": ["currentuser"],
+  "networkAccess": {
+    "allowedDomains": ["https://api.figma.com"],
+    "reasoning": "Comment Relay reads and writes native Figma comments using Figma's REST API."
+  }
+}

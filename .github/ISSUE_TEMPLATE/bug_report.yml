@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a reproducible problem in Comment Relay
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include access tokens, private file keys, or confidential comment text.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Figma environment
+      options:
+        - Desktop
+        - Browser
+        - Both
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: Use sanitized names and sample content.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      render: shell

@@ -1,0 +1,14 @@
+{
+  "name": "comment-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local-first Figma plugin for transferring native comments between similar files.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.js",
+    "check": "npm run build && npm test && node --check dist/code.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

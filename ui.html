@@ -1,0 +1,696 @@
+<!doctype html>
+<!--
+  Comment Relay UI
+  Dependency-free by design: Figma loads this file directly into the plugin iframe.
+  Opening it in a normal browser enables an isolated demo state for visual review.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Comment Relay</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: var(--figma-color-bg, #f7f7f8);
+        --surface: var(--figma-color-bg-secondary, #ffffff);
+        --surface-hover: var(--figma-color-bg-hover, #f0f0f2);
+        --surface-pressed: var(--figma-color-bg-pressed, #e7e7eb);
+        --text: var(--figma-color-text, #242429);
+        --muted: var(--figma-color-text-secondary, #74747e);
+        --faint: var(--figma-color-text-tertiary, #9b9ba4);
+        --border: var(--figma-color-border, #e3e3e7);
+        --strong-border: var(--figma-color-border-strong, #c9c9d0);
+        --accent: #6c5ce7;
+        --accent-strong: #5746d6;
+        --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+        --green: #16865c;
+        --green-soft: color-mix(in srgb, #28b47d 13%, transparent);
+        --amber: #a7660b;
+        --amber-soft: color-mix(in srgb, #e8a227 15%, transparent);
+        --red: #d43f52;
+        --red-soft: color-mix(in srgb, #e24a5f 12%, transparent);
+        --shadow: 0 12px 32px rgba(20, 20, 28, 0.16);
+        font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 12px;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
+      #app { width: 100%; height: 100%; overflow: hidden; }
+      button, input, textarea { font: inherit; color: inherit; }
+      button { border: 0; }
+      button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+      svg { display: block; }
+      .hidden { display: none !important; }
+
+      .boot {
+        width: 100%; height: 100%; display: grid; place-items: center; color: var(--muted);
+      }
+      .spinner {
+        width: 22px; height: 22px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%;
+        animation: spin .75s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      .app-shell { height: 100%; display: grid; grid-template-columns: 224px minmax(0, 1fr); overflow: hidden; }
+      .sidebar {
+        min-width: 0; border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column;
+      }
+      .brand {
+        height: 64px; padding: 0 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border);
+      }
+      .brand-mark {
+        width: 31px; height: 31px; border-radius: 10px; display: grid; place-items: center; color: white;
+        background: linear-gradient(145deg, #8877ff, #5b49d9); box-shadow: 0 6px 16px rgba(91, 73, 217, .28);
+      }
+      .brand-copy { min-width: 0; }
+      .brand-name { font-size: 13px; font-weight: 700; letter-spacing: -.01em; }
+      .brand-sub { color: var(--muted); font-size: 10px; margin-top: 2px; }
+
+      .sidebar-section { padding: 14px 12px 8px; display: flex; align-items: center; justify-content: space-between; }
+      .eyebrow { text-transform: uppercase; letter-spacing: .075em; font-size: 9px; font-weight: 700; color: var(--faint); }
+      .count-badge { min-width: 18px; height: 18px; border-radius: 9px; display: inline-grid; place-items: center; background: var(--surface-hover); color: var(--muted); font-size: 9px; }
+      .collection-list { padding: 0 8px; min-height: 0; overflow-y: auto; flex: 1; }
+      .collection-item {
+        width: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 9px;
+        padding: 8px; border-radius: 9px; background: transparent; text-align: left; cursor: pointer; margin-bottom: 2px;
+      }
+      .collection-item:hover { background: var(--surface-hover); }
+      .collection-item.active { background: var(--accent-soft); }
+      .collection-icon { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--surface-hover); color: var(--muted); }
+      .collection-item.active .collection-icon { background: var(--accent); color: white; }
+      .collection-copy { min-width: 0; }
+      .collection-name { font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .collection-meta { font-size: 9px; color: var(--muted); margin-top: 3px; }
+      .collection-count { font-size: 10px; color: var(--faint); padding-right: 3px; }
+
+      .sidebar-actions { padding: 10px 12px; border-top: 1px solid var(--border); display: grid; gap: 8px; }
+      .current-file {
+        border: 1px solid var(--border); border-radius: 10px; padding: 9px 10px; display: flex; align-items: center; gap: 8px;
+        background: var(--bg);
+      }
+      .file-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); flex: 0 0 auto; }
+      .file-copy { min-width: 0; flex: 1; }
+      .file-name { font-size: 10px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+      .file-page { font-size: 9px; color: var(--muted); margin-top: 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+      .main { min-width: 0; min-height: 0; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+      .topbar {
+        height: 64px; min-height: 64px; padding: 0 18px; border-bottom: 1px solid var(--border); background: var(--surface);
+        display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      }
+      .topbar-left { min-width: 0; }
+      .title-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+      .collection-title-input {
+        width: min(390px, 45vw); border: 0; background: transparent; padding: 0; font-size: 16px; line-height: 22px; font-weight: 700;
+        letter-spacing: -.02em; overflow: hidden; text-overflow: ellipsis;
+      }
+      .collection-title-input:hover { background: var(--surface-hover); border-radius: 5px; padding: 0 4px; margin-left: -4px; }
+      .source-line { color: var(--muted); font-size: 10px; margin-top: 3px; display: flex; align-items: center; gap: 5px; }
+      .topbar-actions { display: flex; align-items: center; gap: 7px; }
+
+      .btn {
+        min-height: 30px; padding: 0 11px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        font-weight: 600; cursor: pointer; white-space: nowrap; background: var(--surface-hover); border: 1px solid transparent;
+      }
+      .btn:hover { background: var(--surface-pressed); }
+      .btn:disabled { opacity: .45; cursor: default; }
+      .btn-primary { background: var(--accent); color: white; }
+      .btn-primary:hover { background: var(--accent-strong); }
+      .btn-secondary { background: var(--surface); border-color: var(--border); }
+      .btn-danger { color: var(--red); background: var(--red-soft); }
+      .btn-quiet { background: transparent; color: var(--muted); }
+      .btn-quiet:hover { color: var(--text); background: var(--surface-hover); }
+      .btn-small { min-height: 26px; padding: 0 8px; font-size: 10px; border-radius: 6px; }
+      .icon-btn {
+        width: 29px; height: 29px; padding: 0; border-radius: 7px; display: inline-grid; place-items: center; background: transparent;
+        color: var(--muted); cursor: pointer;
+      }
+      .icon-btn:hover { background: var(--surface-hover); color: var(--text); }
+      .icon-btn.danger:hover { color: var(--red); background: var(--red-soft); }
+
+      .workspace { height: calc(100% - 64px); flex: 0 0 auto; min-height: 0; display: grid; grid-template-columns: minmax(340px, 1fr) 270px; overflow: hidden; }
+      .comments-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+      .toolbar {
+        min-height: 49px; padding: 8px 14px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); background: var(--bg);
+      }
+      .search { position: relative; min-width: 130px; flex: 1; }
+      .search svg { position: absolute; left: 9px; top: 8px; color: var(--muted); pointer-events: none; }
+      .search input {
+        width: 100%; height: 30px; border: 1px solid var(--border); background: var(--surface); border-radius: 7px; padding: 0 10px 0 30px;
+      }
+      .filter-tabs { display: inline-flex; padding: 2px; background: var(--surface-hover); border-radius: 7px; }
+      .filter-tab { height: 26px; padding: 0 9px; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 10px; }
+      .filter-tab.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+
+      .list-header { padding: 7px 15px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; background: var(--surface); }
+      .checkbox {
+        appearance: none; width: 14px; height: 14px; border: 1px solid var(--strong-border); border-radius: 4px; background: var(--surface); display: grid; place-items: center; cursor: pointer;
+      }
+      .checkbox:checked { border-color: var(--accent); background: var(--accent); }
+      .checkbox:checked::after { content: ""; width: 6px; height: 3px; border-left: 1.5px solid white; border-bottom: 1.5px solid white; transform: translateY(-1px) rotate(-45deg); }
+
+      .comment-list { min-height: 0; overflow-y: auto; padding: 8px; flex: 1; }
+      .comment-card {
+        display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 7px; padding: 10px 8px; border: 1px solid transparent; border-radius: 10px;
+        cursor: pointer; transition: background .12s ease, border-color .12s ease; margin-bottom: 3px;
+      }
+      .comment-card:hover { background: var(--surface); border-color: var(--border); }
+      .comment-card.active { background: var(--surface); border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); box-shadow: 0 2px 8px rgba(25,25,35,.05); }
+      .comment-card .checkbox { margin-top: 2px; }
+      .comment-body { min-width: 0; }
+      .author-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+      .avatar { width: 19px; height: 19px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 8px; font-weight: 700; overflow: hidden; flex: 0 0 auto; }
+      .avatar img { width: 100%; height: 100%; object-fit: cover; }
+      .author { font-size: 10px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .date { color: var(--faint); font-size: 9px; white-space: nowrap; }
+      .message { margin-top: 6px; font-size: 11px; line-height: 16px; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+      .comment-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 8px; color: var(--muted); min-width: 0; }
+      .path { display: flex; align-items: center; gap: 4px; font-size: 9px; min-width: 0; max-width: 100%; }
+      .path span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chip { height: 18px; padding: 0 6px; border-radius: 9px; display: inline-flex; align-items: center; gap: 4px; font-size: 8px; font-weight: 650; background: var(--surface-hover); color: var(--muted); white-space: nowrap; }
+      .chip.green { background: var(--green-soft); color: var(--green); }
+      .chip.amber { background: var(--amber-soft); color: var(--amber); }
+      .chip.purple { background: var(--accent-soft); color: var(--accent); }
+      .card-actions { opacity: 0; display: flex; gap: 1px; margin-top: -4px; }
+      .comment-card:hover .card-actions, .comment-card.active .card-actions { opacity: 1; }
+      .card-actions .icon-btn { width: 25px; height: 25px; }
+
+      .empty-list { min-height: 260px; display: grid; place-items: center; text-align: center; color: var(--muted); padding: 30px; }
+      .empty-list strong { display: block; color: var(--text); margin-bottom: 5px; }
+
+      .inspector { min-width: 0; min-height: 0; background: var(--surface); display: flex; flex-direction: column; }
+      .inspector-scroll { overflow-y: auto; min-height: 0; padding: 15px; flex: 1; }
+      .inspector-title { font-size: 11px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+      .section { padding: 12px 0; border-top: 1px solid var(--border); }
+      .section:first-of-type { border-top: 0; padding-top: 0; }
+      .label { font-size: 9px; color: var(--muted); font-weight: 650; margin-bottom: 6px; }
+      .textarea { width: 100%; min-height: 104px; resize: vertical; border: 1px solid var(--border); border-radius: 8px; padding: 9px; background: var(--bg); line-height: 16px; }
+      .textarea:focus { border-color: var(--accent); }
+      .row { display: flex; align-items: center; gap: 7px; }
+      .row.between { justify-content: space-between; }
+      .stack { display: grid; gap: 7px; }
+      .placement-card { border: 1px solid var(--border); border-radius: 9px; padding: 10px; background: var(--bg); }
+      .placement-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .placement-name { font-size: 10px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .placement-path { margin-top: 5px; font-size: 9px; color: var(--muted); line-height: 13px; word-break: break-word; }
+      .confidence { display: inline-flex; align-items: center; gap: 5px; font-size: 8px; text-transform: uppercase; letter-spacing: .04em; font-weight: 750; }
+      .confidence-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+      .confidence.high { color: var(--green); } .confidence.high .confidence-dot { background: var(--green); }
+      .confidence.review { color: var(--amber); } .confidence.review .confidence-dot { background: var(--amber); }
+      .confidence.manual { color: var(--red); } .confidence.manual .confidence-dot { background: var(--red); }
+      .muted { color: var(--muted); }
+      .tiny { font-size: 9px; line-height: 13px; }
+      .info-grid { display: grid; grid-template-columns: 74px 1fr; gap: 6px 8px; font-size: 9px; }
+      .info-grid dt { color: var(--muted); }
+      .info-grid dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+      .summary-box { border-radius: 8px; padding: 9px 7px; background: var(--bg); text-align: center; }
+      .summary-number { font-size: 16px; font-weight: 750; }
+      .summary-label { font-size: 8px; color: var(--muted); margin-top: 2px; }
+
+      .applybar {
+        min-height: 65px; padding: 9px 14px; border-top: 1px solid var(--border); background: var(--surface);
+        display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      }
+      .apply-copy { min-width: 0; }
+      .apply-title { font-weight: 650; font-size: 10px; }
+      .apply-sub { color: var(--muted); font-size: 9px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .apply-actions { display: flex; align-items: center; gap: 7px; }
+      .option { display: inline-flex; align-items: center; gap: 5px; font-size: 9px; color: var(--muted); white-space: nowrap; }
+      .option input { width: 13px; height: 13px; accent-color: var(--accent); margin: 0; }
+
+      .empty-workspace { flex: 1; display: grid; place-items: center; padding: 40px; text-align: center; }
+      .empty-illustration { width: 72px; height: 72px; margin: 0 auto 18px; border-radius: 22px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; }
+      .empty-workspace h2 { font-size: 18px; margin: 0 0 7px; letter-spacing: -.02em; }
+      .empty-workspace p { max-width: 340px; color: var(--muted); margin: 0 auto 16px; line-height: 17px; }
+
+      .setup { width: 100%; height: 100%; display: grid; grid-template-columns: 1.05fr .95fr; background: var(--surface); }
+      .setup-hero { padding: 46px; color: white; background: radial-gradient(circle at 20% 15%, rgba(255,255,255,.18), transparent 34%), linear-gradient(150deg, #7b6bed, #4d3bc5 70%); display: flex; flex-direction: column; justify-content: space-between; }
+      .setup-logo { display: flex; align-items: center; gap: 10px; font-weight: 700; }
+      .setup-hero h1 { font-size: 33px; letter-spacing: -.04em; line-height: 38px; margin: 0 0 13px; max-width: 390px; }
+      .setup-hero p { color: rgba(255,255,255,.78); line-height: 19px; max-width: 390px; margin: 0; font-size: 12px; }
+      .setup-flow { display: flex; align-items: center; gap: 8px; color: rgba(255,255,255,.75); font-size: 9px; }
+      .flow-step { display: flex; align-items: center; gap: 5px; }
+      .flow-number { width: 19px; height: 19px; border-radius: 7px; background: rgba(255,255,255,.16); display: grid; place-items: center; color: white; font-weight: 700; }
+      .setup-form { padding: 46px; display: flex; align-items: center; }
+      .setup-card { width: 100%; max-width: 360px; margin: auto; }
+      .setup-card h2 { margin: 0 0 7px; font-size: 19px; letter-spacing: -.025em; }
+      .setup-card > p { color: var(--muted); line-height: 17px; margin: 0 0 22px; }
+      .field { display: grid; gap: 6px; margin-bottom: 13px; }
+      .field label { font-size: 10px; font-weight: 650; }
+      .input { width: 100%; height: 34px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); padding: 0 10px; }
+      .input:focus { border-color: var(--accent); }
+      .help { font-size: 9px; color: var(--muted); line-height: 14px; }
+      .privacy-note { display: flex; align-items: flex-start; gap: 8px; background: var(--green-soft); color: var(--green); padding: 10px; border-radius: 8px; font-size: 9px; line-height: 14px; margin: 14px 0; }
+
+      .modal-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(18,18,24,.42); display: grid; place-items: center; padding: 20px; }
+      .modal { width: min(430px, 100%); max-height: 90vh; overflow: auto; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); box-shadow: var(--shadow); }
+      .modal-header { padding: 16px 17px 12px; display: flex; align-items: flex-start; justify-content: space-between; }
+      .modal-title { font-size: 14px; font-weight: 750; }
+      .modal-sub { color: var(--muted); font-size: 9px; margin-top: 4px; line-height: 14px; }
+      .modal-body { padding: 5px 17px 16px; }
+      .modal-footer { border-top: 1px solid var(--border); padding: 11px 17px; display: flex; justify-content: flex-end; gap: 7px; }
+      .check-row { display: flex; align-items: flex-start; gap: 9px; padding: 9px 0; }
+      .check-row input { accent-color: var(--accent); margin-top: 2px; }
+      .check-copy strong { display: block; font-size: 10px; }
+      .check-copy span { display: block; color: var(--muted); font-size: 9px; line-height: 13px; margin-top: 2px; }
+
+      .toast-stack { position: fixed; right: 13px; bottom: 13px; z-index: 80; display: grid; gap: 7px; width: 285px; pointer-events: none; }
+      .toast { background: color-mix(in srgb, var(--surface) 96%, transparent); backdrop-filter: blur(12px); border: 1px solid var(--border); box-shadow: var(--shadow); border-radius: 9px; padding: 10px 11px; display: flex; gap: 8px; align-items: flex-start; animation: toast-in .18s ease-out; }
+      .toast.error { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+      .toast.success { border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
+      .toast-icon { margin-top: 1px; color: var(--accent); }
+      .toast.error .toast-icon { color: var(--red); } .toast.success .toast-icon { color: var(--green); }
+      .toast-copy { font-size: 10px; line-height: 14px; }
+      @keyframes toast-in { from { opacity: 0; transform: translateY(5px); } }
+
+      .progress-line { height: 2px; position: absolute; left: 224px; top: 63px; right: 0; z-index: 10; overflow: hidden; }
+      .progress-line::after { content: ""; display: block; height: 100%; width: 36%; background: var(--accent); animation: progress 1.1s ease-in-out infinite; }
+      @keyframes progress { from { transform: translateX(-110%); } to { transform: translateX(390%); } }
+
+      @media (prefers-color-scheme: dark) {
+        :root { --shadow: 0 14px 34px rgba(0, 0, 0, .34); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"><div class="boot"><div class="spinner"></div></div></div>
+    <div id="modal-root"></div>
+    <div id="toast-root" class="toast-stack"></div>
+
+    <script>
+      const app = document.getElementById("app");
+      const modalRoot = document.getElementById("modal-root");
+      const toastRoot = document.getElementById("toast-root");
+      const IS_PREVIEW = window.parent === window;
+
+      const state = {
+        ready: false,
+        authenticated: false,
+        context: null,
+        packages: [],
+        activePackageId: null,
+        activeCommentId: null,
+        selected: new Set(),
+        search: "",
+        filter: "all",
+        plan: null,
+        overrides: {},
+        operation: null,
+        modal: null,
+        options: { includeAttribution: true, sanitizeMentions: true },
+      };
+
+      const icons = {
+        relay: `<svg width="19" height="19" viewBox="0 0 20 20" fill="none"><path d="M5.4 5.7h7.3M10.7 3.7l2 2-2 2M14.6 14.3H7.3M9.3 12.3l-2 2 2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.2 8.2v3.6M15.8 8.2v3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`,
+        comments: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M3 3.25h10v7H7l-3.2 2.4V10.25H3v-7Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M5.2 5.6h5.6M5.2 7.8h3.5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>`,
+        plus: `<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M7 2.3v9.4M2.3 7h9.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+        search: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4" stroke="currentColor" stroke-width="1.3"/><path d="m10 10 3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`,
+        settings: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M6.9 2.7h2.2l.4 1.5 1.3.6 1.4-.7 1.1 1.9-1.1 1v1.4l1.1 1-1.1 1.9-1.4-.6-1.3.7-.4 1.4H6.9l-.4-1.4-1.3-.7-1.4.6-1.1-1.9 1.1-1V7l-1.1-1 1.1-1.9 1.4.7 1.3-.6.4-1.5Z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>`,
+        more: `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="13" cy="8" r="1"/></svg>`,
+        copy: `<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><rect x="4.5" y="4.5" width="7" height="7" rx="1" stroke="currentColor"/><path d="M9.5 4.5v-2h-7v7h2" stroke="currentColor" stroke-linejoin="round"/></svg>`,
+        trash: `<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2.5 4h9M5 2.5h4M4 4l.6 7h4.8l.6-7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+        pin: `<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M10.2 5.7c0 2.6-3.2 5.8-3.2 5.8S3.8 8.3 3.8 5.7a3.2 3.2 0 1 1 6.4 0Z" stroke="currentColor"/><circle cx="7" cy="5.7" r="1.1" fill="currentColor"/></svg>`,
+        locate: `<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="3.5" stroke="currentColor"/><path d="M7 1.5v2M7 10.5v2M1.5 7h2M10.5 7h2" stroke="currentColor" stroke-linecap="round"/></svg>`,
+        export: `<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4.5 4.5 7 2l2.5 2.5M2.5 8.5v3h9v-3" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+        import: `<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M7 9V2M4.5 6.5 7 9l2.5-2.5M2.5 8.5v3h9v-3" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+        chevron: `<svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="m4.5 2.5 3.5 3.5-3.5 3.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+        close: `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="m3 3 8 8M11 3l-8 8" stroke="currentColor" stroke-linecap="round"/></svg>`,
+        check: `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="m2.8 7.2 2.6 2.6 5.8-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+        alert: `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2 12 11H2L7 2Z" stroke="currentColor" stroke-linejoin="round"/><path d="M7 5.3v2.8M7 9.7v.1" stroke="currentColor" stroke-linecap="round"/></svg>`,
+      };
+
+      function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+      }
+
+      function formatDate(value) {
+        if (!value) return "—";
+        const date = new Date(value);
+        const now = new Date();
+        const diff = Math.max(0, now - date);
+        if (diff < 60_000) return "now";
+        if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
+        if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
+        if (diff < 604_800_000) return `${Math.floor(diff / 86_400_000)}d`;
+        return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      }
+
+      function initials(name) {
+        return String(name || "?").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+      }
+
+      function rootComments(pkg) { return pkg ? pkg.comments.filter((comment) => !comment.parentId) : []; }
+      function replies(pkg, id) { return pkg ? pkg.comments.filter((comment) => comment.parentId === id) : []; }
+      function activePackage() { return state.packages.find((pkg) => pkg.id === state.activePackageId) || state.packages[0] || null; }
+      function activeComment() { return activePackage()?.comments.find((comment) => comment.id === state.activeCommentId) || null; }
+      function planItem(id) { return state.plan?.items?.find((item) => item.commentId === id) || null; }
+
+      function send(type, payload = {}) {
+        if (IS_PREVIEW) return mockSend(type, payload);
+        parent.postMessage({ pluginMessage: { type, payload } }, "*");
+      }
+
+      function showToast(message, tone = "neutral") {
+        const toast = document.createElement("div");
+        toast.className = `toast ${tone}`;
+        toast.innerHTML = `<div class="toast-icon">${tone === "error" ? icons.alert : icons.check}</div><div class="toast-copy">${escapeHtml(message)}</div>`;
+        toastRoot.appendChild(toast);
+        setTimeout(() => toast.remove(), 3600);
+      }
+
+      function adoptState(payload) {
+        const previousPackage = state.activePackageId;
+        state.ready = true;
+        state.authenticated = payload.authenticated;
+        state.context = payload.context;
+        state.packages = payload.packages || [];
+        state.activePackageId = payload.preferredPackageId || (state.packages.some((pkg) => pkg.id === previousPackage) ? previousPackage : state.packages[0]?.id || null);
+        const pkg = activePackage();
+        if (!pkg?.comments.some((comment) => comment.id === state.activeCommentId && !comment.parentId)) state.activeCommentId = rootComments(pkg)[0]?.id || null;
+        if (!previousPackage || previousPackage !== state.activePackageId || !state.selected.size) {
+          state.selected = new Set(rootComments(pkg).map((comment) => comment.id));
+        }
+        state.plan = null;
+        state.overrides = {};
+        render();
+      }
+
+      function handlePluginMessage(message) {
+        const { type, payload } = message || {};
+        if (type === "state") adoptState(payload);
+        if (type === "context") { state.context = payload; render(); }
+        if (type === "preview") { state.plan = payload; state.operation = null; render(); }
+        if (type === "manual-target") {
+          state.overrides[payload.commentId] = payload.targetNodeId;
+          const item = planItem(payload.commentId);
+          if (item) Object.assign(item, { targetNodeId: payload.targetNodeId, targetName: payload.targetName, targetPath: payload.targetPath, mappedMeta: payload.mappedMeta, canApply: true, confidence: "high", score: 1, reasons: ["manual selection"] });
+          showToast(`Placed on ${payload.targetName}`, "success");
+          render();
+        }
+        if (type === "operation") {
+          state.operation = payload.status === "working" ? payload : null;
+          if (payload.status === "error") showToast(payload.message, "error");
+          if (payload.status === "warning") showToast(payload.message, "neutral");
+          render();
+        }
+        if (type === "toast") showToast(payload.message, payload.tone);
+      }
+
+      window.onmessage = (event) => handlePluginMessage(event.data?.pluginMessage);
+
+      function render() {
+        if (!state.ready) return;
+        app.innerHTML = state.authenticated ? renderApp() : renderSetup();
+        modalRoot.innerHTML = state.modal ? renderModal() : "";
+        bindEvents();
+      }
+
+      function renderSetup() {
+        return `<div class="setup">
+          <section class="setup-hero">
+            <div class="setup-logo"><div class="brand-mark">${icons.relay}</div> Comment Relay</div>
+            <div>
+              <h1>Carry feedback forward, without losing its place.</h1>
+              <p>Capture native comments from one Figma file, organize them locally, then match and copy them into a similar file.</p>
+            </div>
+            <div class="setup-flow">
+              <div class="flow-step"><span class="flow-number">1</span> Capture</div>${icons.chevron}
+              <div class="flow-step"><span class="flow-number">2</span> Review</div>${icons.chevron}
+              <div class="flow-step"><span class="flow-number">3</span> Relay</div>
+            </div>
+          </section>
+          <section class="setup-form">
+            <div class="setup-card">
+              <div class="eyebrow" style="margin-bottom:8px">One-time setup</div>
+              <h2>Connect native comments</h2>
+              <p>Figma requires a personal access token to let a local plugin read and post comments.</p>
+              <form id="setup-form">
+                <div class="field">
+                  <label for="setup-token">Personal access token</label>
+                  <input id="setup-token" class="input" type="password" autocomplete="off" placeholder="figd_…" required />
+                  <div class="help">Create a token with <b>file_comments:read</b> and <b>file_comments:write</b> scopes.</div>
+                </div>
+                <div class="privacy-note">${icons.check}<span>The token and captured comments stay in Figma's local plugin storage on this device. No Comment Relay server is used.</span></div>
+                <button class="btn btn-primary" style="width:100%;height:36px" type="submit">Verify and continue</button>
+              </form>
+              <button class="btn btn-quiet btn-small" style="width:100%;margin-top:7px" data-action="open-token-help">How to create a token</button>
+            </div>
+          </section>
+        </div>${state.operation ? `<div class="progress-line"></div>` : ""}`;
+      }
+
+      function renderApp() {
+        const pkg = activePackage();
+        return `<div class="app-shell">
+          ${renderSidebar(pkg)}
+          <main class="main">${pkg ? renderWorkspace(pkg) : renderEmptyWorkspace()}</main>
+        </div>${state.operation ? `<div class="progress-line"></div>` : ""}`;
+      }
+
+      function renderSidebar(pkg) {
+        return `<aside class="sidebar">
+          <div class="brand"><div class="brand-mark">${icons.relay}</div><div class="brand-copy"><div class="brand-name">Comment Relay</div><div class="brand-sub">Local comment workspace</div></div></div>
+          <div class="sidebar-section"><span class="eyebrow">Collections</span><span class="count-badge">${state.packages.length}</span></div>
+          <div class="collection-list">
+            ${state.packages.map((item) => `<button class="collection-item ${item.id === pkg?.id ? "active" : ""}" data-action="select-package" data-id="${escapeHtml(item.id)}">
+              <span class="collection-icon">${icons.comments}</span>
+              <span class="collection-copy"><span class="collection-name">${escapeHtml(item.name)}</span><span class="collection-meta">${formatDate(item.updatedAt || item.capturedAt)} · ${rootComments(item).length} comments</span></span>
+              <span class="collection-count">${rootComments(item).length}</span>
+            </button>`).join("")}
+          </div>
+          <div class="sidebar-actions">
+            <button class="btn btn-primary" data-action="open-capture">${icons.plus} Capture current file</button>
+            <div class="current-file"><span class="file-dot"></span><div class="file-copy"><div class="file-name">${escapeHtml(state.context?.fileLabel || "Current file")}</div><div class="file-page">${escapeHtml(state.context?.pageName || "No page")}</div></div><button class="icon-btn" data-action="open-settings" title="Settings">${icons.settings}</button></div>
+          </div>
+        </aside>`;
+      }
+
+      function renderEmptyWorkspace() {
+        return `<div class="topbar"><div class="topbar-left"><div class="title-line"><strong>Comment workspace</strong></div><div class="source-line">Nothing captured yet</div></div><div class="topbar-actions"><button class="icon-btn" data-action="open-settings">${icons.settings}</button></div></div>
+        <div class="empty-workspace"><div><div class="empty-illustration">${icons.comments}</div><h2>Start with a comment collection</h2><p>Open a source Figma file and capture its comments. They will remain available when you open this plugin in another file.</p><button class="btn btn-primary" data-action="open-capture">${icons.plus} Capture current file</button></div></div>`;
+      }
+
+      function renderWorkspace(pkg) {
+        const roots = filteredRoots(pkg);
+        const selectedCount = [...state.selected].filter((id) => rootComments(pkg).some((comment) => comment.id === id)).length;
+        return `<header class="topbar">
+          <div class="topbar-left"><div class="title-line"><input class="collection-title-input" data-action="rename-package" value="${escapeHtml(pkg.name)}" aria-label="Collection name" /></div><div class="source-line">Captured ${formatDate(pkg.capturedAt)} <span>·</span> ${rootComments(pkg).length} comments <span>·</span> ${pkg.stats?.totalReplies || repliesCount(pkg)} replies</div></div>
+          <div class="topbar-actions"><button class="btn btn-secondary btn-small" data-action="export-package">${icons.export} Export</button><button class="icon-btn" data-action="open-menu" title="Collection actions">${icons.more}</button></div>
+        </header>
+        <div class="workspace">
+          <section class="comments-pane">
+            <div class="toolbar"><div class="search">${icons.search}<input id="search-input" placeholder="Search comments" value="${escapeHtml(state.search)}" /></div><div class="filter-tabs">${["all","open","resolved","local"].map((filter) => `<button class="filter-tab ${state.filter === filter ? "active" : ""}" data-action="filter" data-filter="${filter}">${filter[0].toUpperCase()+filter.slice(1)}</button>`).join("")}</div><button class="icon-btn" data-action="add-comment" title="Add local note">${icons.plus}</button></div>
+            <div class="list-header"><input class="checkbox" type="checkbox" data-action="toggle-all" ${selectedCount === rootComments(pkg).length && rootComments(pkg).length ? "checked" : ""}/><span>${selectedCount} of ${rootComments(pkg).length} selected</span><span style="margin-left:auto">${state.plan ? renderCompactSummary(state.plan.summary) : "Preview to match layers"}</span></div>
+            <div class="comment-list">${roots.length ? roots.map((comment) => renderCommentCard(pkg, comment)).join("") : `<div class="empty-list"><div><strong>No matching comments</strong>Try another search or filter.</div></div>`}</div>
+            ${renderApplyBar(pkg, selectedCount)}
+          </section>
+          ${renderInspector(pkg)}
+        </div>`;
+      }
+
+      function repliesCount(pkg) { return pkg.comments.filter((comment) => comment.parentId).length; }
+
+      function filteredRoots(pkg) {
+        const query = state.search.trim().toLowerCase();
+        return rootComments(pkg).filter((comment) => {
+          if (state.filter === "open" && comment.resolvedAt) return false;
+          if (state.filter === "resolved" && !comment.resolvedAt) return false;
+          if (state.filter === "local" && !comment.isLocal) return false;
+          if (!query) return true;
+          const replyText = replies(pkg, comment.id).map((reply) => reply.message).join(" ");
+          return `${comment.message} ${comment.user?.name || ""} ${replyText}`.toLowerCase().includes(query);
+        });
+      }
+
+      function avatar(user) {
+        return `<span class="avatar">${escapeHtml(initials(user?.name))}</span>`;
+      }
+
+      function renderCommentCard(pkg, comment) {
+        const replyCount = replies(pkg, comment.id).length;
+        const item = planItem(comment.id);
+        const path = comment.anchor?.path?.map((part) => part.name).join(" / ");
+        return `<article class="comment-card ${state.activeCommentId === comment.id ? "active" : ""}" data-action="activate-comment" data-id="${escapeHtml(comment.id)}">
+          <input class="checkbox" type="checkbox" data-action="toggle-comment" data-id="${escapeHtml(comment.id)}" ${state.selected.has(comment.id) ? "checked" : ""}/>
+          <div class="comment-body"><div class="author-row">${avatar(comment.user)}<span class="author">${escapeHtml(comment.user?.name || "Unknown")}</span><span class="date">${formatDate(comment.createdAt)}</span>${comment.resolvedAt ? `<span class="chip green">Resolved</span>` : ""}${comment.isLocal ? `<span class="chip purple">Local</span>` : ""}</div><div class="message">${escapeHtml(comment.message)}</div><div class="comment-footer">${path ? `<span class="path">${icons.pin}<span>${escapeHtml(path)}</span></span>` : `<span class="chip amber">Needs placement</span>`}${replyCount ? `<span class="chip">${replyCount} ${replyCount === 1 ? "reply" : "replies"}</span>` : ""}${item ? renderConfidence(item.confidence, false) : ""}</div></div>
+          <div class="card-actions"><button class="icon-btn" data-action="duplicate-comment" data-id="${escapeHtml(comment.id)}" title="Duplicate saved comment">${icons.copy}</button><button class="icon-btn danger" data-action="delete-comment" data-id="${escapeHtml(comment.id)}" title="Remove from collection">${icons.trash}</button></div>
+        </article>`;
+      }
+
+      function renderConfidence(confidence, showLabel = true) {
+        const label = confidence === "high" ? "High match" : confidence === "review" ? "Review" : "Manual";
+        return `<span class="confidence ${confidence}"><span class="confidence-dot"></span>${showLabel ? label : ""}</span>`;
+      }
+
+      function renderCompactSummary(summary) {
+        return `<span class="row" style="gap:8px"><span class="confidence high"><span class="confidence-dot"></span>${summary.high}</span><span class="confidence review"><span class="confidence-dot"></span>${summary.review}</span><span class="confidence manual"><span class="confidence-dot"></span>${summary.manual}</span></span>`;
+      }
+
+      function renderInspector(pkg) {
+        const comment = activeComment();
+        if (!comment || comment.parentId) return `<aside class="inspector"><div class="inspector-scroll">${renderPlanSummary()}</div></aside>`;
+        const item = planItem(comment.id);
+        const commentReplies = replies(pkg, comment.id);
+        return `<aside class="inspector"><div class="inspector-scroll">
+          <div class="inspector-title"><span>Comment details</span>${comment.isLocal ? `<span class="chip purple">Local note</span>` : ""}</div>
+          <div class="section"><div class="label">MESSAGE</div><textarea id="message-editor" class="textarea">${escapeHtml(comment.message)}</textarea><div class="row" style="justify-content:flex-end;margin-top:7px"><button class="btn btn-secondary btn-small" data-action="save-comment" data-id="${escapeHtml(comment.id)}">Save changes</button></div></div>
+          <div class="section"><div class="row between"><div class="label" style="margin:0">DESTINATION</div>${item ? renderConfidence(item.confidence) : `<span class="tiny muted">Not previewed</span>`}</div>
+            <div style="height:7px"></div>${renderPlacement(comment, item)}
+            <div class="row" style="margin-top:8px"><button class="btn btn-secondary btn-small" data-action="manual-target" data-id="${escapeHtml(comment.id)}">${icons.pin} Use selected layer</button>${item?.targetNodeId ? `<button class="btn btn-quiet btn-small" data-action="reveal-target" data-node-id="${escapeHtml(item.targetNodeId)}">${icons.locate} Locate</button>` : ""}</div>
+          </div>
+          ${commentReplies.length ? `<div class="section"><div class="label">THREAD · ${commentReplies.length} ${commentReplies.length === 1 ? "REPLY" : "REPLIES"}</div><div class="stack">${commentReplies.map((reply) => `<div class="placement-card"><div class="author-row">${avatar(reply.user)}<span class="author">${escapeHtml(reply.user?.name || "Unknown")}</span><span class="date">${formatDate(reply.createdAt)}</span></div><div class="tiny" style="margin-top:7px;white-space:pre-wrap">${escapeHtml(reply.message)}</div></div>`).join("")}</div></div>` : ""}
+          <div class="section"><div class="label">SOURCE</div><dl class="info-grid"><dt>Author</dt><dd>${escapeHtml(comment.user?.name || "Unknown")}</dd><dt>Created</dt><dd>${comment.createdAt ? new Date(comment.createdAt).toLocaleString() : "—"}</dd><dt>Status</dt><dd>${comment.resolvedAt ? "Resolved in source" : "Open in source"}</dd><dt>Anchor</dt><dd>${escapeHtml(comment.anchor?.name || "Canvas / manual")}</dd></dl></div>
+          ${item?.alreadyImported ? `<div class="section"><button class="btn btn-danger btn-small" data-action="delete-remote" data-id="${escapeHtml(comment.id)}">${icons.trash} Delete copied comment from this file</button></div>` : ""}
+        </div></aside>`;
+      }
+
+      function renderPlacement(comment, item) {
+        if (!item) return `<div class="placement-card"><div class="placement-name">Preview placement first</div><div class="placement-path">Comment Relay will compare layer names, hierarchy, size, text, and stable anchors.</div></div>`;
+        if (!item.canApply) return `<div class="placement-card"><div class="placement-top"><div class="placement-name">No safe match</div>${renderConfidence("manual")}</div><div class="placement-path">Select the intended layer on the Figma canvas, then choose “Use selected layer”.</div></div>`;
+        return `<div class="placement-card"><div class="placement-top"><div class="placement-name">${escapeHtml(item.targetName || "Canvas position")}</div>${item.alreadyImported ? `<span class="chip green">Already copied</span>` : ""}</div><div class="placement-path">${escapeHtml(item.targetPath || "Preserve the original canvas coordinates")}</div>${item.reasons?.length ? `<div class="tiny muted" style="margin-top:7px">Matched by ${escapeHtml(item.reasons.join(", "))}</div>` : ""}</div>`;
+      }
+
+      function renderPlanSummary() {
+        const summary = state.plan?.summary || { high: 0, review: 0, manual: 0 };
+        return `<div class="inspector-title">Placement overview</div><p class="tiny muted" style="line-height:15px;margin:0 0 13px">Preview placement to see which comments can be copied automatically and which need your confirmation.</p><div class="summary-grid"><div class="summary-box"><div class="summary-number" style="color:var(--green)">${summary.high}</div><div class="summary-label">High match</div></div><div class="summary-box"><div class="summary-number" style="color:var(--amber)">${summary.review}</div><div class="summary-label">Review</div></div><div class="summary-box"><div class="summary-number" style="color:var(--red)">${summary.manual}</div><div class="summary-label">Manual</div></div></div>`;
+      }
+
+      function renderApplyBar(pkg, selectedCount) {
+        const isSource = pkg.sourceFileKey && pkg.sourceFileKey === state.context?.fileKey;
+        const readyCount = state.plan?.items?.filter((item) => state.selected.has(item.commentId) && item.canApply && !item.alreadyImported).length || 0;
+        const working = Boolean(state.operation);
+        return `<footer class="applybar"><div class="apply-copy"><div class="apply-title">${state.operation ? escapeHtml(state.operation.message) : state.plan ? `${readyCount} ready to copy` : `${selectedCount} comments selected`}</div><div class="apply-sub">${isSource ? "You are viewing the source file—open the destination before copying." : state.plan ? `${state.plan.summary.high} high confidence · ${state.plan.summary.review} review · ${state.plan.summary.manual} manual` : "Preview first; nothing is posted without confirmation."}</div></div><div class="apply-actions"><label class="option" title="Prefix imported messages with the original author and date"><input type="checkbox" data-action="option-attribution" ${state.options.includeAttribution ? "checked" : ""}/> Attribution</label><label class="option" title="Replace @ signs to avoid notifying people unexpectedly"><input type="checkbox" data-action="option-mentions" ${state.options.sanitizeMentions ? "checked" : ""}/> Protect mentions</label>${state.plan ? `<button class="btn btn-primary" data-action="apply" ${working || !readyCount || isSource ? "disabled" : ""}>${icons.relay} Copy ${readyCount}</button>` : `<button class="btn btn-primary" data-action="preview" ${working || !selectedCount ? "disabled" : ""}>Preview placement</button>`}</div></footer>`;
+      }
+
+      function renderModal() {
+        const type = state.modal.type;
+        if (type === "capture") return modalShell("Capture comments", "Save the current file's native comments as a reusable local collection.", `<div class="field"><label for="capture-name">Collection name</label><input id="capture-name" class="input" value="${escapeHtml(state.modal.name)}" /></div><label class="check-row"><input id="capture-resolved" type="checkbox"/><span class="check-copy"><strong>Include resolved comments</strong><span>Useful for a complete review archive; off by default to keep the list focused.</span></span></label><label class="check-row"><input id="capture-stamp" type="checkbox" checked/><span class="check-copy"><strong>Add invisible stable anchors</strong><span>Improves future matching if this file is duplicated after capture. It adds private plugin metadata to commented layers.</span></span></label>`, `<button class="btn btn-secondary" data-action="close-modal">Cancel</button><button class="btn btn-primary" data-action="confirm-capture">Capture comments</button>`);
+        if (type === "settings") return modalShell("Settings", "Manage the local token and collection files.", `<div class="privacy-note">${icons.check}<span>Comment Relay only connects to api.figma.com. Your token and comment collections remain in Figma's local plugin storage.</span></div><div class="stack"><button class="btn btn-secondary" data-action="import-package">${icons.import} Import collection JSON</button><button class="btn btn-danger" data-action="clear-token">Remove local access token</button></div>`, `<button class="btn btn-primary" data-action="close-modal">Done</button>`);
+        if (type === "menu") return modalShell("Collection actions", activePackage()?.name || "", `<div class="stack"><button class="btn btn-secondary" data-action="export-package">${icons.export} Export collection JSON</button><button class="btn btn-secondary" data-action="add-comment">${icons.plus} Add a local note</button><button class="btn btn-danger" data-action="delete-package">${icons.trash} Delete saved collection</button></div>`, `<button class="btn btn-primary" data-action="close-modal">Done</button>`);
+        if (type === "add") return modalShell("Add a local comment", "Create a reusable note, then choose its destination layer during placement.", `<div class="field"><label for="new-message">Message</label><textarea id="new-message" class="textarea" placeholder="Write a comment…"></textarea></div>`, `<button class="btn btn-secondary" data-action="close-modal">Cancel</button><button class="btn btn-primary" data-action="confirm-add">Add to collection</button>`);
+        if (type === "token-help") return modalShell("Create a Figma token", "In Figma, open Settings → Security → Personal access tokens.", `<ol class="tiny muted" style="line-height:18px;padding-left:18px"><li>Choose <b>Generate new token</b>.</li><li>Enable <b>file_comments:read</b> and <b>file_comments:write</b>.</li><li>Copy the token and return here. Figma shows it only once.</li></ol><div class="privacy-note">${icons.alert}<span>Figma personal tokens expire after at most 90 days. You can replace the token from Settings when needed.</span></div>`, `<button class="btn btn-primary" data-action="close-modal">Got it</button>`);
+        return "";
+      }
+
+      function modalShell(title, subtitle, body, footer) {
+        return `<div class="modal-backdrop" data-action="close-modal-backdrop"><div class="modal"><div class="modal-header"><div><div class="modal-title">${escapeHtml(title)}</div><div class="modal-sub">${escapeHtml(subtitle)}</div></div><button class="icon-btn" data-action="close-modal">${icons.close}</button></div><div class="modal-body">${body}</div><div class="modal-footer">${footer}</div></div></div>`;
+      }
+
+      function bindEvents() {
+        document.querySelectorAll("[data-action]").forEach((element) => element.addEventListener("click", handleAction));
+        const search = document.getElementById("search-input");
+        if (search) search.addEventListener("input", (event) => { state.search = event.target.value; render(); document.getElementById("search-input")?.focus(); });
+        const title = document.querySelector('[data-action="rename-package"]');
+        if (title) title.addEventListener("change", () => send("rename-package", { packageId: activePackage()?.id, name: title.value }));
+        document.getElementById("setup-form")?.addEventListener("submit", (event) => { event.preventDefault(); send("save-token", { token: document.getElementById("setup-token").value }); });
+      }
+
+      function handleAction(event) {
+        const button = event.currentTarget;
+        const action = button.dataset.action;
+        if (["toggle-comment", "duplicate-comment", "delete-comment"].includes(action)) event.stopPropagation();
+        const pkg = activePackage();
+        if (action === "select-package") { state.activePackageId = button.dataset.id; state.activeCommentId = rootComments(activePackage())[0]?.id || null; state.selected = new Set(rootComments(activePackage()).map((comment) => comment.id)); state.plan = null; state.overrides = {}; render(); }
+        if (action === "activate-comment") { state.activeCommentId = button.dataset.id; render(); }
+        if (action === "toggle-comment") { const id = button.dataset.id; state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id); render(); }
+        if (action === "toggle-all") { const roots = rootComments(pkg); state.selected = button.checked ? new Set(roots.map((comment) => comment.id)) : new Set(); render(); }
+        if (action === "filter") { state.filter = button.dataset.filter; render(); }
+        if (action === "open-capture") { state.modal = { type: "capture", name: `Comments · ${state.context?.pageName || "Current file"}` }; render(); }
+        if (action === "confirm-capture") { const name = document.getElementById("capture-name").value; const includeResolved = document.getElementById("capture-resolved").checked; const stampAnchors = document.getElementById("capture-stamp").checked; state.modal = null; render(); send("capture", { name, includeResolved, stampAnchors }); }
+        if (action === "open-settings") { state.modal = { type: "settings" }; render(); }
+        if (action === "open-menu") { state.modal = { type: "menu" }; render(); }
+        if (action === "add-comment") { state.modal = { type: "add" }; render(); }
+        if (action === "confirm-add") { const message = document.getElementById("new-message").value; if (!message.trim()) return showToast("Write a message first.", "error"); state.modal = null; render(); send("add-comment", { packageId: pkg.id, message }); }
+        if (action === "open-token-help") { state.modal = { type: "token-help" }; render(); }
+        if (action === "close-modal") { state.modal = null; render(); }
+        if (action === "close-modal-backdrop" && event.target === button) { state.modal = null; render(); }
+        if (action === "clear-token") { if (confirm("Remove the locally stored token? Your saved comment collections will remain.")) { state.modal = null; render(); send("clear-token"); } }
+        if (action === "duplicate-comment") send("duplicate-comment", { packageId: pkg.id, commentId: button.dataset.id });
+        if (action === "delete-comment" && confirm("Remove this comment and its replies from the saved collection? The original Figma file will not change.")) send("delete-comment", { packageId: pkg.id, commentId: button.dataset.id });
+        if (action === "save-comment") send("update-comment", { packageId: pkg.id, commentId: button.dataset.id, message: document.getElementById("message-editor").value });
+        if (action === "preview") send("preview", { packageId: pkg.id, overrides: state.overrides });
+        if (action === "manual-target") send("manual-target", { packageId: pkg.id, commentId: button.dataset.id });
+        if (action === "reveal-target") send("reveal-target", { nodeId: button.dataset.nodeId });
+        if (action === "apply") {
+          const readyIds = (state.plan?.items || []).filter((item) => state.selected.has(item.commentId) && item.canApply && !item.alreadyImported).map((item) => item.commentId);
+          send("apply", { packageId: pkg.id, commentIds: readyIds, overrides: state.overrides, options: state.options });
+        }
+        if (action === "delete-remote" && confirm("Delete the copied native comment from the current Figma file? This action affects collaborators and cannot be undone by Comment Relay.")) send("delete-remote-comment", { packageId: pkg.id, commentId: button.dataset.id });
+        if (action === "option-attribution") { state.options.includeAttribution = button.checked; }
+        if (action === "option-mentions") { state.options.sanitizeMentions = button.checked; }
+        if (action === "delete-package" && confirm("Delete this saved collection from local storage? Export it first if you need a backup.")) { state.modal = null; render(); send("delete-package", { packageId: pkg.id }); }
+        if (action === "export-package") exportPackage(pkg);
+        if (action === "import-package") importPackage();
+      }
+
+      function exportPackage(pkg) {
+        if (!pkg) return;
+        const blob = new Blob([JSON.stringify({ format: "comment-relay", version: 1, package: pkg }, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${pkg.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "comments"}.comment-relay.json`;
+        anchor.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        showToast("Collection exported.", "success");
+      }
+
+      function importPackage() {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".json,.comment-relay.json,application/json";
+        input.onchange = async () => {
+          try {
+            const data = JSON.parse(await input.files[0].text());
+            state.modal = null;
+            render();
+            send("import-package", { data });
+          } catch { showToast("That file is not valid JSON.", "error"); }
+        };
+        input.click();
+      }
+
+      function demoState() {
+        const now = Date.now();
+        if (location.search.includes("setup")) {
+          return { authenticated: false, context: { fileKey: "demo", fileLabel: "Checkout V3", pageName: "Desktop · Checkout" }, preferredPackageId: null, packages: [] };
+        }
+        return {
+          authenticated: true,
+          context: { fileKey: "destination-demo", fileLabel: "Checkout V3", pageName: "Desktop · Checkout", canUseCurrentFile: true, selection: [{ id: "9:9", name: "Order summary", type: "FRAME" }], user: { name: "Maya Chen" } },
+          preferredPackageId: "demo-1",
+          packages: [{
+            schemaVersion: 1, id: "demo-1", name: "Checkout review · Round 2", sourceFileKey: "source-demo", sourcePageName: "Desktop · Checkout", capturedAt: new Date(now - 86400000 * 2).toISOString(), updatedAt: new Date(now - 3600000).toISOString(),
+            stats: { totalRoots: 6, totalReplies: 2, resolvedExcluded: 3 }, imports: [],
+            comments: [
+              { id: "c1", parentId: null, message: "Can we make the delivery estimate more prominent? This is a key decision point before payment.", user: { name: "Nora Patel" }, createdAt: new Date(now - 7200000).toISOString(), resolvedAt: null, isLocal: false, clientMeta: { node_id: "1:2", node_offset: { x: 90, y: 20 } }, anchor: { nodeId: "1:2", name: "Delivery estimate", type: "FRAME", pageName: "Checkout", path: [{ name: "Checkout", type: "PAGE" }, { name: "Desktop", type: "FRAME" }, { name: "Order summary", type: "FRAME" }, { name: "Delivery estimate", type: "FRAME" }], bounds: { width: 280, height: 42 } } },
+              { id: "r1", parentId: "c1", message: "Agreed. We can bring the date into the first line and increase contrast.", user: { name: "Maya Chen" }, createdAt: new Date(now - 6800000).toISOString(), resolvedAt: null },
+              { id: "c2", parentId: null, message: "The promo-code interaction feels hidden. Could we expose the field after the first tap instead of opening a modal?", user: { name: "Leo Martin" }, createdAt: new Date(now - 86400000).toISOString(), resolvedAt: null, isLocal: false, clientMeta: { node_id: "2:3", node_offset: { x: 40, y: 18 } }, anchor: { nodeId: "2:3", name: "Promo code", type: "FRAME", pageName: "Checkout", path: [{ name: "Checkout", type: "PAGE" }, { name: "Desktop", type: "FRAME" }, { name: "Promo code", type: "FRAME" }], bounds: { width: 280, height: 48 } } },
+              { id: "c3", parentId: null, message: "Legal approved this wording. Keep it unchanged in the next revision.", user: { name: "Sofia Rossi" }, createdAt: new Date(now - 172800000).toISOString(), resolvedAt: new Date(now - 86000000).toISOString(), isLocal: false, clientMeta: { node_id: "3:4", node_offset: { x: 20, y: 12 } }, anchor: { nodeId: "3:4", name: "Terms", type: "TEXT", pageName: "Checkout", path: [{ name: "Checkout", type: "PAGE" }, { name: "Desktop", type: "FRAME" }, { name: "Terms", type: "TEXT" }], bounds: { width: 310, height: 36 } } },
+              { id: "c4", parentId: null, message: "Confirm that the loading state also prevents a second payment submission.", user: { name: "Maya Chen" }, createdAt: new Date(now - 900000).toISOString(), resolvedAt: null, isLocal: true, clientMeta: null, anchor: null },
+              { id: "c5", parentId: null, message: "The card logos are visually competing with the form label. Reduce them by around 15%.", user: { name: "Jon Bell" }, createdAt: new Date(now - 4000000).toISOString(), resolvedAt: null, isLocal: false, clientMeta: { node_id: "5:6", node_offset: { x: 200, y: 16 } }, anchor: { nodeId: "5:6", name: "Payment methods", type: "FRAME", pageName: "Checkout", path: [{ name: "Checkout", type: "PAGE" }, { name: "Desktop", type: "FRAME" }, { name: "Payment", type: "FRAME" }, { name: "Payment methods", type: "FRAME" }], bounds: { width: 300, height: 54 } } },
+              { id: "c6", parentId: null, message: "Please check the focus order once the address suggestion list is open.", user: { name: "Ari Kim" }, createdAt: new Date(now - 2800000).toISOString(), resolvedAt: null, isLocal: false, clientMeta: { node_id: "6:7", node_offset: { x: 40, y: 28 } }, anchor: { nodeId: "6:7", name: "Address", type: "FRAME", pageName: "Checkout", path: [{ name: "Checkout", type: "PAGE" }, { name: "Desktop", type: "FRAME" }, { name: "Address", type: "FRAME" }], bounds: { width: 480, height: 260 } } },
+            ],
+          }, { schemaVersion: 1, id: "demo-2", name: "Mobile QA notes", sourceFileKey: "source-2", capturedAt: new Date(now - 604800000).toISOString(), updatedAt: new Date(now - 604800000).toISOString(), comments: [], imports: [] }],
+        };
+      }
+
+      function mockSend(type, payload) {
+        if (type === "init") return setTimeout(() => adoptState(demoState()), 100);
+        if (type === "preview") {
+          state.operation = { status: "working", message: "Matching layers…" }; render();
+          setTimeout(() => {
+            const pkg = activePackage();
+            const items = rootComments(pkg).map((comment, index) => ({ commentId: comment.id, targetNodeId: index === 3 ? null : `target-${index}`, targetName: index === 3 ? null : comment.anchor?.name || "Selected layer", targetPath: index === 3 ? null : `Checkout / Desktop / ${comment.anchor?.name || "Selected layer"}`, confidence: index < 3 ? "high" : index === 4 ? "review" : "manual", score: index < 3 ? .96 : index === 4 ? .78 : .4, reasons: index < 3 ? ["matching hierarchy", "matching size"] : ["similar layer name"], canApply: index !== 3 && index !== 5, alreadyImported: false, mappedMeta: index !== 3 ? {} : null }));
+            state.plan = { items, summary: { total: items.length, high: 3, review: 1, manual: 2, imported: 0 } }; state.operation = null; render();
+          }, 650);
+        } else if (type !== "refresh-context") showToast("Preview mode: action simulated.", "success");
+      }
+
+      send("init");
+    </script>
+  </body>
+</html>

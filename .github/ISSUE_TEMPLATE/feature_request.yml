@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose an improvement to Comment Relay
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed experience
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Security and privacy considerations
+      description: Does this require new data, scopes, storage, or network access?
+    validations:
+      required: true

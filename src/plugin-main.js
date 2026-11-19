@@ -1,0 +1,667 @@
+/**
+ * Comment Relay — Figma main-thread runtime.
+ *
+ * Responsibilities:
+ * - Keep credentials and collections in Figma-managed clientStorage.
+ * - Read/write native comments exclusively through api.figma.com.
+ * - Build portable anchors from the current document tree.
+ * - Coordinate capture, preview, manual placement, import, and rollback with the UI.
+ *
+ * Security boundary: never send the token back to the iframe after it is stored.
+ * The UI receives only an `authenticated` boolean. See docs/SECURITY.md.
+ */
+const COMMENT_RELAY_VERSION = 1;
+const API_BASE = "https://api.figma.com/v1";
+const TOKEN_KEY = "comment-relay:token";
+const PACKAGES_KEY = "comment-relay:packages";
+const STABLE_ANCHOR_KEY = "comment-relay-anchor";
+const MAX_STORAGE_BYTES = 4_700_000;
+
+let cachedPackages = null;
+
+function relayId(prefix = "id") {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function post(type, payload = {}) {
+  figma.ui.postMessage({ type, payload });
+}
+
+function errorMessage(error) {
+  if (error instanceof Error) return error.message;
+  return String(error || "Something went wrong");
+}
+
+async function getToken() {
+  return (await figma.clientStorage.getAsync(TOKEN_KEY)) || "";
+}
+
+async function getPackages() {
+  if (cachedPackages) return cachedPackages;
+  const stored = await figma.clientStorage.getAsync(PACKAGES_KEY);
+  cachedPackages = Array.isArray(stored) ? stored : [];
+  return cachedPackages;
+}
+
+async function savePackages(packages) {
+  const serialized = JSON.stringify(packages);
+  if (serialized.length > MAX_STORAGE_BYTES) {
+    throw new Error("The local library is almost at Figma's 5 MB limit. Export or remove an older collection first.");
+  }
+  cachedPackages = packages;
+  await figma.clientStorage.setAsync(PACKAGES_KEY, packages);
+}
+
+function currentContext() {
+  const selection = figma.currentPage.selection || [];
+  return {
+    fileKey: figma.fileKey || null,
+    fileLabel: figma.root?.name && figma.root.name !== "Document" ? figma.root.name : "Current Figma file",
+    pageId: figma.currentPage.id,
+    pageName: figma.currentPage.name,
+    selection: selection.slice(0, 3).map((node) => ({ id: node.id, name: node.name, type: node.type })),
+    canUseCurrentFile: Boolean(figma.fileKey),
+    user: figma.currentUser
+      ? { id: figma.currentUser.id, name: figma.currentUser.name, photoUrl: figma.currentUser.photoUrl || null }
+      : null,
+  };
+}
+
+async function sendState(preferredPackageId = null) {
+  const [token, packages] = await Promise.all([getToken(), getPackages()]);
+  post("state", {
+    version: COMMENT_RELAY_VERSION,
+    authenticated: Boolean(token),
+    context: currentContext(),
+    packages,
+    preferredPackageId,
+  });
+}
+
+async function apiRequest(path, options = {}, explicitToken = null) {
+  const token = explicitToken || (await getToken());
+  if (!token) throw new Error("Add a Figma personal access token before using native comments.");
+
+  const headers = { ...(options.headers || {}) };
+  headers["X-Figma-Token"] = token;
+  if (options.body !== undefined) headers["Content-Type"] = "application/json";
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: options.method || "GET",
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+
+  const raw = await response.text();
+  let data = null;
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = { message: raw };
+    }
+  }
+
+  if (!response.ok) {
+    const detail = data?.message || data?.err || data?.error || `Figma API returned ${response.status}`;
+    if (response.status === 403) {
+      throw new Error(`${detail}. Check that the token has file_comments:read and file_comments:write access.`);
+    }
+    throw new Error(detail);
+  }
+  return data;
+}
+
+function nodeBounds(node) {
+  if (!("width" in node) || !("height" in node)) return null;
+  return {
+    width: Number(node.width) || 0,
+    height: Number(node.height) || 0,
+    x: "x" in node ? Number(node.x) || 0 : 0,
+    y: "y" in node ? Number(node.y) || 0 : 0,
+  };
+}
+
+function getPage(node) {
+  let cursor = node;
+  while (cursor && cursor.type !== "PAGE" && cursor.parent) cursor = cursor.parent;
+  return cursor?.type === "PAGE" ? cursor : null;
+}
+
+function nodePath(node) {
+  const path = [];
+  let cursor = node;
+  while (cursor && cursor.type !== "DOCUMENT") {
+    let index = 0;
+    const siblings = cursor.parent && "children" in cursor.parent ? cursor.parent.children : [];
+    if (siblings?.length) index = Math.max(0, siblings.findIndex((item) => item.id === cursor.id));
+    path.push({ name: cursor.name || cursor.type, type: cursor.type, index });
+    cursor = cursor.parent;
+  }
+  return path.reverse().slice(-12);
+}
+
+function readStableId(node) {
+  try {
+    return typeof node.getPluginData === "function" ? node.getPluginData(STABLE_ANCHOR_KEY) || null : null;
+  } catch {
+    return null;
+  }
+}
+
+function ensureStableId(node) {
+  const existing = readStableId(node);
+  if (existing) return existing;
+  if (typeof node.setPluginData !== "function") return null;
+  const stableId = relayId("anchor");
+  try {
+    node.setPluginData(STABLE_ANCHOR_KEY, stableId);
+    return stableId;
+  } catch {
+    return null;
+  }
+}
+
+function describeNode(node, shouldStamp = false) {
+  if (!node) return null;
+  const page = getPage(node);
+  let text = "";
+  if (node.type === "TEXT") text = String(node.characters || "").slice(0, 180);
+  return {
+    nodeId: node.id,
+    stableId: shouldStamp ? ensureStableId(node) : readStableId(node),
+    name: node.name || node.type,
+    type: node.type,
+    pageId: page?.id || null,
+    pageName: page?.name || "",
+    path: nodePath(node),
+    bounds: nodeBounds(node),
+    text,
+  };
+}
+
+async function describeNodeById(nodeId, shouldStamp = false) {
+  if (!nodeId) return null;
+  const node = await figma.getNodeByIdAsync(nodeId);
+  return node ? describeNode(node, shouldStamp) : null;
+}
+
+async function collectCandidates() {
+  if (typeof figma.loadAllPagesAsync === "function") await figma.loadAllPagesAsync();
+  const candidates = [];
+  const stack = [...figma.root.children];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) continue;
+    if (node.type !== "PAGE") candidates.push(describeNode(node, false));
+    if ("children" in node && node.children?.length) {
+      for (let index = node.children.length - 1; index >= 0; index -= 1) stack.push(node.children[index]);
+    }
+  }
+  return candidates.filter(Boolean);
+}
+
+function rootsForPackage(pkg) {
+  return pkg.comments.filter((comment) => !comment.parentId);
+}
+
+function repliesFor(pkg, rootId) {
+  return pkg.comments
+    .filter((comment) => comment.parentId === rootId)
+    .sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
+}
+
+function latestImportFor(pkg, destinationFileKey, commentId) {
+  const batches = (pkg.imports || [])
+    .filter((batch) => batch.destinationFileKey === destinationFileKey)
+    .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+  for (const batch of batches) {
+    const mapping = (batch.mappings || []).find((item) => item.localId === commentId);
+    if (mapping) return { ...mapping, batchId: batch.id, createdAt: batch.createdAt };
+  }
+  return null;
+}
+
+function summarizePlan(items) {
+  return items.reduce(
+    (summary, item) => {
+      summary.total += 1;
+      if (item.alreadyImported) summary.imported += 1;
+      if (item.confidence === "high") summary.high += 1;
+      else if (item.confidence === "review") summary.review += 1;
+      else summary.manual += 1;
+      return summary;
+    },
+    { total: 0, high: 0, review: 0, manual: 0, imported: 0 },
+  );
+}
+
+async function buildImportPlan(pkg, overrides = {}) {
+  const destinationFileKey = figma.fileKey || null;
+  const candidates = await collectCandidates();
+  const candidateById = new Map(candidates.map((candidate) => [candidate.nodeId, candidate]));
+  const items = [];
+
+  for (const comment of rootsForPackage(pkg)) {
+    const overrideNodeId = overrides[comment.id] || null;
+    let target = overrideNodeId ? candidateById.get(overrideNodeId) : null;
+    let confidence = overrideNodeId && target ? "high" : "manual";
+    let score = overrideNodeId && target ? 1 : 0;
+    let reasons = overrideNodeId && target ? ["manual selection"] : [];
+    let mappedMeta = null;
+
+    if (!target && comment.anchor) {
+      const result = CommentRelayMatcher.findBestMatch(comment.anchor, candidates);
+      target = result.target;
+      confidence = result.confidence;
+      score = result.score;
+      reasons = result.reasons;
+    }
+
+    if (target) {
+      mappedMeta = comment.clientMeta
+        ? CommentRelayMatcher.mapClientMeta(comment.clientMeta, comment.anchor, target)
+        : CommentRelayMatcher.createMetaForTarget(target);
+    } else if (comment.clientMeta && !comment.clientMeta.node_id) {
+      mappedMeta = JSON.parse(JSON.stringify(comment.clientMeta));
+      confidence = "review";
+      score = 0.72;
+      reasons = ["original canvas coordinates"];
+    }
+
+    const imported = destinationFileKey ? latestImportFor(pkg, destinationFileKey, comment.id) : null;
+    items.push({
+      commentId: comment.id,
+      sourceCommentId: comment.sourceCommentId,
+      message: comment.message,
+      targetNodeId: target?.nodeId || null,
+      targetName: target?.name || null,
+      targetPath: target ? target.path.map((part) => part.name).join(" / ") : null,
+      confidence,
+      score,
+      reasons,
+      mappedMeta,
+      canApply: Boolean(mappedMeta),
+      alreadyImported: Boolean(imported),
+      imported,
+    });
+  }
+
+  return {
+    packageId: pkg.id,
+    destinationFileKey,
+    items,
+    summary: summarizePlan(items),
+  };
+}
+
+function normalizeApiComment(comment, includedSourceIds) {
+  const isReply = Boolean(comment.parent_id);
+  return {
+    id: comment.id || relayId(isReply ? "reply" : "comment"),
+    sourceCommentId: comment.id || null,
+    parentId: isReply && includedSourceIds.has(comment.parent_id) ? comment.parent_id : null,
+    message: String(comment.message || ""),
+    user: comment.user
+      ? { id: comment.user.id || null, name: comment.user.handle || comment.user.name || "Unknown", photoUrl: comment.user.img_url || null }
+      : { id: null, name: "Unknown", photoUrl: null },
+    createdAt: comment.created_at || new Date().toISOString(),
+    resolvedAt: comment.resolved_at || null,
+    clientMeta: comment.client_meta || null,
+    reactions: Array.isArray(comment.reactions) ? comment.reactions : [],
+    anchor: null,
+    isLocal: false,
+  };
+}
+
+async function captureComments(payload) {
+  const fileKey = figma.fileKey || payload.fileKey;
+  if (!fileKey) throw new Error("This plugin cannot identify the current file. Install it as a private/local development plugin.");
+
+  post("operation", { kind: "capture", status: "working", message: "Reading native comments…" });
+  const result = await apiRequest(`/files/${encodeURIComponent(fileKey)}/comments?as_md=false`);
+  const allComments = Array.isArray(result?.comments) ? result.comments : [];
+  const roots = allComments.filter((comment) => !comment.parent_id);
+  const includedRoots = roots.filter((comment) => payload.includeResolved || !comment.resolved_at);
+  const includedRootIds = new Set(includedRoots.map((comment) => comment.id));
+  const included = allComments.filter((comment) => !comment.parent_id ? includedRootIds.has(comment.id) : includedRootIds.has(comment.parent_id));
+  const includedSourceIds = new Set(included.map((comment) => comment.id));
+  const comments = included.map((comment) => normalizeApiComment(comment, includedSourceIds));
+
+  post("operation", { kind: "capture", status: "working", message: "Building portable anchors…" });
+  const anchorCache = new Map();
+  for (const comment of comments) {
+    if (comment.parentId) continue;
+    const nodeId = comment.clientMeta?.node_id;
+    if (!nodeId) continue;
+    if (!anchorCache.has(nodeId)) anchorCache.set(nodeId, await describeNodeById(nodeId, Boolean(payload.stampAnchors)));
+    comment.anchor = anchorCache.get(nodeId);
+  }
+
+  const packages = await getPackages();
+  const now = new Date().toISOString();
+  const pkg = {
+    schemaVersion: COMMENT_RELAY_VERSION,
+    id: relayId("collection"),
+    name: String(payload.name || "Comment collection").trim() || "Comment collection",
+    sourceFileKey: fileKey,
+    sourcePageName: figma.currentPage.name,
+    capturedAt: now,
+    updatedAt: now,
+    comments,
+    imports: [],
+    stats: {
+      totalRoots: includedRoots.length,
+      totalReplies: comments.filter((comment) => comment.parentId).length,
+      resolvedExcluded: roots.length - includedRoots.length,
+    },
+  };
+  await savePackages([pkg, ...packages]);
+  post("operation", { kind: "capture", status: "success", message: `Saved ${includedRoots.length} comments`, packageId: pkg.id });
+  await sendState(pkg.id);
+}
+
+function attributionFor(comment) {
+  const author = comment.user?.name || "Unknown author";
+  const date = comment.createdAt ? new Date(comment.createdAt).toISOString().slice(0, 10) : "unknown date";
+  return `Originally from ${author} · ${date}`;
+}
+
+function outgoingMessage(comment, options) {
+  let message = String(comment.message || "").trim();
+  if (options.sanitizeMentions) message = message.replace(/@/g, "＠");
+  if (options.includeAttribution) message = `${attributionFor(comment)}\n\n${message}`;
+  return message || "Imported comment";
+}
+
+async function applyComments(payload) {
+  const packages = await getPackages();
+  const pkg = packages.find((item) => item.id === payload.packageId);
+  if (!pkg) throw new Error("That saved collection no longer exists.");
+  if (!figma.fileKey) throw new Error("The current Figma file key is unavailable.");
+
+  const plan = await buildImportPlan(pkg, payload.overrides || {});
+  const selected = new Set(payload.commentIds || []);
+  const options = {
+    includeAttribution: payload.options?.includeAttribution !== false,
+    sanitizeMentions: payload.options?.sanitizeMentions !== false,
+    allowDuplicates: Boolean(payload.options?.allowDuplicates),
+  };
+  const batch = {
+    id: relayId("import"),
+    destinationFileKey: figma.fileKey,
+    destinationPageName: figma.currentPage.name,
+    createdAt: new Date().toISOString(),
+    mappings: [],
+  };
+  const failures = [];
+  const candidates = plan.items.filter((item) => selected.has(item.commentId));
+  let completed = 0;
+
+  for (const item of candidates) {
+    if (!item.canApply) {
+      failures.push({ commentId: item.commentId, error: "Choose a destination layer first." });
+      continue;
+    }
+    if (item.alreadyImported && !options.allowDuplicates) {
+      failures.push({ commentId: item.commentId, error: "Already copied to this file." });
+      continue;
+    }
+    const comment = pkg.comments.find((entry) => entry.id === item.commentId);
+    if (!comment) continue;
+
+    post("operation", {
+      kind: "apply",
+      status: "working",
+      message: `Copying ${completed + 1} of ${candidates.length}…`,
+      progress: candidates.length ? completed / candidates.length : 0,
+    });
+
+    try {
+      const createdRoot = await apiRequest(`/files/${encodeURIComponent(figma.fileKey)}/comments`, {
+        method: "POST",
+        body: { message: outgoingMessage(comment, options), client_meta: item.mappedMeta },
+      });
+      const replyMappings = [];
+      for (const reply of repliesFor(pkg, comment.id)) {
+        const createdReply = await apiRequest(`/files/${encodeURIComponent(figma.fileKey)}/comments`, {
+          method: "POST",
+          body: { message: outgoingMessage(reply, options), comment_id: createdRoot.id },
+        });
+        replyMappings.push({ localId: reply.id, remoteId: createdReply.id });
+      }
+      batch.mappings.push({ localId: comment.id, remoteId: createdRoot.id, replies: replyMappings });
+      completed += 1;
+    } catch (error) {
+      failures.push({ commentId: item.commentId, error: errorMessage(error) });
+    }
+  }
+
+  if (batch.mappings.length) {
+    pkg.imports = [...(pkg.imports || []), batch];
+    pkg.updatedAt = new Date().toISOString();
+    await savePackages(packages);
+  }
+
+  post("operation", {
+    kind: "apply",
+    status: failures.length ? "warning" : "success",
+    message: `Copied ${batch.mappings.length} comment${batch.mappings.length === 1 ? "" : "s"}`,
+    result: { copied: batch.mappings.length, failures },
+  });
+  await sendState(pkg.id);
+}
+
+function validateImportedPackage(input) {
+  const candidate = input?.package || input;
+  if (!candidate || !Array.isArray(candidate.comments)) throw new Error("This file is not a Comment Relay collection.");
+  const clone = JSON.parse(JSON.stringify(candidate));
+  clone.schemaVersion = COMMENT_RELAY_VERSION;
+  clone.id = relayId("collection");
+  clone.name = `${String(clone.name || "Imported collection")} (imported)`;
+  clone.comments = clone.comments.slice(0, 5000).map((comment) => ({
+    ...comment,
+    id: String(comment.id || relayId("comment")),
+    message: String(comment.message || ""),
+  }));
+  clone.imports = [];
+  clone.updatedAt = new Date().toISOString();
+  return clone;
+}
+
+async function mutatePackage(packageId, mutator) {
+  const packages = await getPackages();
+  const pkg = packages.find((item) => item.id === packageId);
+  if (!pkg) throw new Error("That saved collection no longer exists.");
+  await mutator(pkg, packages);
+  pkg.updatedAt = new Date().toISOString();
+  await savePackages(packages);
+  await sendState(pkg.id);
+}
+
+async function handleMessage(message) {
+  const type = message?.type;
+  const payload = message?.payload || {};
+  try {
+    if (type === "init") {
+      await sendState();
+      return;
+    }
+    if (type === "save-token") {
+      const token = String(payload.token || "").trim();
+      if (!token) throw new Error("Paste a personal access token first.");
+      if (figma.fileKey) await apiRequest(`/files/${encodeURIComponent(figma.fileKey)}/comments?as_md=false`, {}, token);
+      await figma.clientStorage.setAsync(TOKEN_KEY, token);
+      post("toast", { tone: "success", message: "Token verified and saved locally." });
+      await sendState();
+      return;
+    }
+    if (type === "clear-token") {
+      await figma.clientStorage.deleteAsync(TOKEN_KEY);
+      post("toast", { tone: "neutral", message: "Local token removed." });
+      await sendState();
+      return;
+    }
+    if (type === "capture") {
+      await captureComments(payload);
+      return;
+    }
+    if (type === "preview") {
+      const packages = await getPackages();
+      const pkg = packages.find((item) => item.id === payload.packageId);
+      if (!pkg) throw new Error("That saved collection no longer exists.");
+      post("operation", { kind: "preview", status: "working", message: "Matching layers…" });
+      const plan = await buildImportPlan(pkg, payload.overrides || {});
+      post("preview", plan);
+      post("operation", { kind: "preview", status: "success", message: "Placement preview is ready." });
+      return;
+    }
+    if (type === "apply") {
+      await applyComments(payload);
+      return;
+    }
+    if (type === "manual-target") {
+      const packages = await getPackages();
+      const pkg = packages.find((item) => item.id === payload.packageId);
+      const comment = pkg?.comments.find((item) => item.id === payload.commentId);
+      const selection = figma.currentPage.selection || [];
+      if (!pkg || !comment) throw new Error("Select a saved comment first.");
+      if (selection.length !== 1) throw new Error("Select exactly one destination layer on the canvas.");
+      const target = describeNode(selection[0], false);
+      const mappedMeta = comment.clientMeta
+        ? CommentRelayMatcher.mapClientMeta(comment.clientMeta, comment.anchor, target)
+        : CommentRelayMatcher.createMetaForTarget(target);
+      post("manual-target", {
+        commentId: comment.id,
+        targetNodeId: target.nodeId,
+        targetName: target.name,
+        targetPath: target.path.map((part) => part.name).join(" / "),
+        mappedMeta,
+      });
+      return;
+    }
+    if (type === "reveal-target") {
+      const node = await figma.getNodeByIdAsync(payload.nodeId);
+      if (!node || node.type === "DOCUMENT" || node.type === "PAGE") throw new Error("That matched layer is no longer available.");
+      const page = getPage(node);
+      if (page && page.id !== figma.currentPage.id) {
+        if (typeof figma.setCurrentPageAsync === "function") await figma.setCurrentPageAsync(page);
+        else figma.currentPage = page;
+      }
+      figma.currentPage.selection = [node];
+      figma.viewport.scrollAndZoomIntoView([node]);
+      return;
+    }
+    if (type === "rename-package") {
+      await mutatePackage(payload.packageId, async (pkg) => {
+        pkg.name = String(payload.name || "").trim() || pkg.name;
+      });
+      return;
+    }
+    if (type === "update-comment") {
+      await mutatePackage(payload.packageId, async (pkg) => {
+        const comment = pkg.comments.find((item) => item.id === payload.commentId);
+        if (!comment) throw new Error("That saved comment no longer exists.");
+        comment.message = String(payload.message || "").trim();
+      });
+      post("toast", { tone: "success", message: "Saved locally." });
+      return;
+    }
+    if (type === "add-comment") {
+      await mutatePackage(payload.packageId, async (pkg) => {
+        pkg.comments.unshift({
+          id: relayId("comment"),
+          sourceCommentId: null,
+          parentId: null,
+          message: String(payload.message || "").trim() || "New comment",
+          user: figma.currentUser
+            ? { id: figma.currentUser.id, name: figma.currentUser.name, photoUrl: figma.currentUser.photoUrl || null }
+            : { id: null, name: "You", photoUrl: null },
+          createdAt: new Date().toISOString(),
+          resolvedAt: null,
+          clientMeta: null,
+          reactions: [],
+          anchor: null,
+          isLocal: true,
+        });
+      });
+      return;
+    }
+    if (type === "duplicate-comment") {
+      await mutatePackage(payload.packageId, async (pkg) => {
+        const original = pkg.comments.find((item) => item.id === payload.commentId && !item.parentId);
+        if (!original) throw new Error("Only top-level comments can be duplicated.");
+        const newRootId = relayId("comment");
+        const copy = {
+          ...JSON.parse(JSON.stringify(original)),
+          id: newRootId,
+          sourceCommentId: null,
+          message: `${original.message} (copy)`,
+          createdAt: new Date().toISOString(),
+          isLocal: true,
+        };
+        const replyCopies = repliesFor(pkg, original.id).map((reply) => ({
+          ...JSON.parse(JSON.stringify(reply)),
+          id: relayId("reply"),
+          sourceCommentId: null,
+          parentId: newRootId,
+          createdAt: new Date().toISOString(),
+          isLocal: true,
+        }));
+        const rootIndex = pkg.comments.findIndex((item) => item.id === original.id);
+        pkg.comments.splice(rootIndex + 1, 0, copy, ...replyCopies);
+      });
+      return;
+    }
+    if (type === "delete-comment") {
+      await mutatePackage(payload.packageId, async (pkg) => {
+        pkg.comments = pkg.comments.filter((item) => item.id !== payload.commentId && item.parentId !== payload.commentId);
+      });
+      post("toast", { tone: "neutral", message: "Removed from the saved collection. The source file was not changed." });
+      return;
+    }
+    if (type === "delete-package") {
+      const packages = await getPackages();
+      const next = packages.filter((item) => item.id !== payload.packageId);
+      await savePackages(next);
+      post("toast", { tone: "neutral", message: "Collection removed from local storage." });
+      await sendState(next[0]?.id || null);
+      return;
+    }
+    if (type === "delete-remote-comment") {
+      const packages = await getPackages();
+      const pkg = packages.find((item) => item.id === payload.packageId);
+      if (!pkg || !figma.fileKey) throw new Error("The imported comment could not be found.");
+      const imported = latestImportFor(pkg, figma.fileKey, payload.commentId);
+      if (!imported) throw new Error("This comment has not been copied to the current file.");
+      await apiRequest(`/files/${encodeURIComponent(figma.fileKey)}/comments/${encodeURIComponent(imported.remoteId)}`, { method: "DELETE" });
+      for (const batch of pkg.imports || []) {
+        if (batch.id === imported.batchId) batch.mappings = batch.mappings.filter((item) => item.localId !== payload.commentId);
+      }
+      pkg.imports = (pkg.imports || []).filter((batch) => batch.mappings?.length);
+      await savePackages(packages);
+      post("toast", { tone: "success", message: "Copied native comment deleted from this file." });
+      await sendState(pkg.id);
+      return;
+    }
+    if (type === "import-package") {
+      const imported = validateImportedPackage(payload.data);
+      const packages = await getPackages();
+      await savePackages([imported, ...packages]);
+      post("toast", { tone: "success", message: "Collection imported." });
+      await sendState(imported.id);
+      return;
+    }
+    if (type === "refresh-context") {
+      post("context", currentContext());
+      return;
+    }
+  } catch (error) {
+    post("operation", { kind: type || "unknown", status: "error", message: errorMessage(error) });
+    post("toast", { tone: "error", message: errorMessage(error) });
+  }
+}
+
+figma.showUI(__html__, { width: 940, height: 680, themeColors: true });
+figma.ui.onmessage = handleMessage;
+figma.on("selectionchange", () => post("context", currentContext()));
